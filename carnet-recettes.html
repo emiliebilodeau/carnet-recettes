@@ -384,7 +384,7 @@ function renderView(){
   const r=recipes.find(x=>x.id===current);if(!r){closeView();return}
   const bar=$("#viewBar"),body=$("#viewBody");bar.replaceChildren();body.replaceChildren();
   if(editing){renderEdit(r,bar,body);return}
-  bar.append(el("button",{class:"btn grow",style:"margin-right:auto",onclick:closeView},"← Toutes les recettes"),el("button",{class:"btn",onclick:()=>{editing=true;renderView()}},"Modifier"));
+  bar.append(el("button",{class:"btn grow",style:"margin-right:auto",onclick:closeView},"← Toutes les recettes"),el("button",{class:"btn",onclick:e=>shareImage(r,e.currentTarget)},"Partager en image"),el("button",{class:"btn",onclick:e=>sharePage(r,e.currentTarget)},"Partager en page"),el("button",{class:"btn",onclick:()=>{editing=true;renderView()}},"Modifier"));
   const c=CATMAP[r.categorie]||CATMAP.autres;
   body.append(el("div",{class:"hero"},
     el("img",{src:imgSrc(r),alt:r.titre}),
@@ -476,12 +476,20 @@ function renderEdit(r,bar,body,draft,aiMsg){
   const collect=()=>({...d,titre:iTitre.value.trim()||"Sans titre",categorie:iCat.value,portions:+iPor.value||0,temps_preparation_min:+iPrep.value||0,temps_cuisson_min:+iCuis.value||0,resume:iRes.value.trim(),
     mots_cles:iTags.value.split(",").map(s=>s.trim().toLowerCase()).filter(Boolean),
     ingredients:d.ingredients.filter(i=>i.nom.trim()),etapes:d.etapes.filter(s=>s.texte.trim()||s.titre.trim())});
-  const aiIn=el("textarea",{id:"e-ai",rows:"3",placeholder:"Ex. : double les portions · remplace la crème par du lait de coco · version à la mijoteuse · ajoute une étape pour la sauce · rends-la moins épicée"});
+  const aiIn=el("textarea",{id:"e-ai",rows:"3",placeholder:"Ex. : double les portions · remplace la crème par du lait de coco · version à la mijoteuse · ou colle ici du texte ou une capture pour compléter la fiche"});
+  const aiShots=[];const aiThumbs=el("div",{class:"shots"});
+  const drawAiShots=()=>{aiThumbs.replaceChildren(...aiShots.map((f,i)=>el("div",{class:"shot"},el("img",{src:URL.createObjectURL(f),alt:"Image "+(i+1)}),el("button",{"aria-label":"Retirer",onclick:()=>{aiShots.splice(i,1);drawAiShots()}},"×"))))};
+  const addAiShots=async files=>{for(const f of [...files]){if(!/^image\//.test(f.type)&&!/\.(heic|heif)$/i.test(f.name||""))continue;const p=await prepImage(f);if(p&&aiShots.length<5)aiShots.push(p)}drawAiShots()};
+  aiIn.addEventListener("paste",e=>{const fs=[...(e.clipboardData?.files||[])].filter(f=>/^image\//.test(f.type));if(fs.length){e.preventDefault();addAiShots(fs);toast("Image ajoutée")}});
+  aiIn.addEventListener("dragover",e=>e.preventDefault());
+  aiIn.addEventListener("drop",e=>{if(e.dataTransfer?.files?.length){e.preventDefault();addAiShots(e.dataTransfer.files)}});
+  const aiFile=el("input",{type:"file",id:"e-ai-file",accept:"image/*",multiple:true,hidden:true,onchange:e=>{addAiShots(e.target.files);e.target.value=""}});
+  const aiCam=el("input",{type:"file",id:"e-ai-cam",accept:"image/*",capture:"environment",hidden:true,onchange:e=>{addAiShots(e.target.files);e.target.value=""}});
   const aiStat=el("span",{class:"status","aria-live":"polite",text:aiMsg||""});
   const aiBtn=el("button",{class:"btn primary sm"},"Appliquer avec Claude");
   aiBtn.onclick=async()=>{
     const instr=aiIn.value.trim();aiStat.classList.remove("err");
-    if(!instr){aiStat.textContent="Écris d'abord ce que tu veux changer.";return}
+    if(!instr&&!aiShots.length){aiStat.textContent="Écris ce que tu veux changer, ou colle du texte ou une image.";return}
     if(!sample){aiStat.classList.add("err");aiStat.textContent="Claude n'est pas disponible dans cette vue.";return}
     const cur=collect();
     const fiche={titre:cur.titre,categorie:cur.categorie,mots_cles:cur.mots_cles,portions:cur.portions,temps_preparation_min:cur.temps_preparation_min,temps_cuisson_min:cur.temps_cuisson_min,resume:cur.resume,ingredients:cur.ingredients,etapes:cur.etapes,meater:cur.meater||null};
@@ -491,13 +499,15 @@ function renderEdit(r,bar,body,draft,aiMsg){
 Petites quantités (moins de 60 ml) en "c. à thé" ou "c. à table", jamais "c. à soupe".
 ${MEATER_RULES}
 
-Demande : """${instr.slice(0,2000)}"""
+La demande peut être une instruction, ou du texte en vrac (une recette, des notes, des quantités) à utiliser pour corriger ou compléter la fiche. ${aiShots.length?"Des images sont jointes (captures ou photos de recette, de notes ou d'emballage) : lis-les et intègre ce qui est utile à la fiche. Si la demande est vide, mets la fiche à jour avec le contenu des images.":""}
+
+Demande : """${(instr||"(aucun texte, voir les images)").slice(0,15000)}"""
 
 Fiche actuelle (JSON) :
 ${JSON.stringify(fiche)}
 
 Réponds UNIQUEMENT avec l'objet JSON de la fiche, de cette forme (sans photo_dans_capture) :
-${SCHEMA}`,{modelTier:"default",cache:false});
+${SCHEMA}`,{modelTier:"default",cache:false,images:aiShots.length?aiShots.slice(0,5):undefined});
       if(!res||!res.titre||!Array.isArray(res.etapes))throw{code:"invalid_json"};
       const n=normalize(res);
       const next={...cur,...n,photoId:d.photoId||null,illustration:d.illustration||null};
@@ -506,7 +516,9 @@ ${SCHEMA}`,{modelTier:"default",cache:false});
       $("#viewSheet").scrollTop=0;
     }catch(e){aiStat.classList.add("err");aiStat.textContent=errMsg(e);aiBtn.disabled=false}
   };
-  const aiBox=el("div",{class:"aibox"},el("label",{class:"lbl",for:"e-ai",text:"Demander à Claude"}),aiIn,el("div",{style:"display:flex;gap:10px;align-items:center;flex-wrap:wrap"},aiBtn,aiStat));
+  const aiBox=el("div",{class:"aibox"},el("label",{class:"lbl",for:"e-ai",text:"Demander à Claude"}),aiIn,aiThumbs,
+    el("div",{style:"display:flex;gap:8px;align-items:center;flex-wrap:wrap"},el("label",{class:"btn sm",for:"e-ai-cam"},"Prendre une photo"),aiCam,el("label",{class:"btn sm",for:"e-ai-file"},"Ajouter des images"),aiFile),
+    el("div",{style:"display:flex;gap:10px;align-items:center;flex-wrap:wrap"},aiBtn,aiStat));
 
   body.append(el("div",{class:"edit narrow",style:"margin:0 auto"},
     el("h2",{style:"font-size:26px",text:"Modifier la fiche"}),
@@ -528,6 +540,102 @@ ${SCHEMA}`,{modelTier:"default",cache:false});
     try{await col.doc(r.id).update(out);Object.assign(r,out);editing=false;renderView();render();toast("Fiche enregistrée")}
     catch(e){toast("Enregistrement refusé : "+(e.message||e.code));save.disabled=false}
   };
+}
+
+/* ---------- Partage d'une fiche (image PNG ou page web) ---------- */
+const SHARE_CSS=`.sc{width:880px;background:#F5F6F1;color:#1D2420;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;line-height:1.5;padding:36px;box-sizing:border-box}
+.sc *{box-sizing:border-box}
+.sc h1,.sc h2{font-family:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;margin:0;letter-spacing:-.01em}
+.sc .top{display:grid;grid-template-columns:1.1fr 1fr;gap:28px;align-items:center}
+.sc .ph{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:12px;display:block;background:#E2EEE6}
+.sc .cat{font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px}
+.sc .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+.sc h1{font-size:36px;line-height:1.08;margin:8px 0 10px}
+.sc .res{color:#5E6A63;margin:0}
+.sc .facts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0 12px}
+.sc .fact{border-top:2px solid #1D2420;padding-top:6px}
+.sc .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#5E6A63;font-weight:600}
+.sc .fact b{display:block;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:18px;font-weight:500}
+.sc .tags{display:flex;flex-wrap:wrap;gap:4px}
+.sc .tag{font-size:12px;background:#E2EEE6;border-radius:4px;padding:1px 7px}
+.sc .mt{background:#FBEBD6;border:1px solid #C9781E;border-radius:12px;padding:14px 16px;margin-top:26px}
+.sc .mt .g{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px}
+.sc .mt .g div{background:#fff;border-radius:8px;padding:8px 10px}
+.sc .mt b{display:block;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:20px;font-weight:500;color:#C9781E}
+.sc .mt small{color:#5E6A63;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:11px}
+.sc .mt p{margin:8px 0 0;font-size:13px}
+.sc .cols{display:grid;grid-template-columns:290px 1fr;gap:32px;margin-top:26px}
+.sc h2{font-size:20px;padding-bottom:6px;border-bottom:1px solid #DCE1D9;margin-bottom:8px}
+.sc ul{list-style:none;padding:0;margin:0}
+.sc li.i{display:grid;grid-template-columns:96px 1fr;gap:10px;padding:6px 0;border-bottom:1px dotted #DCE1D9}
+.sc .q{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:13px;text-align:right}
+.sc .note{color:#5E6A63;font-size:13px}
+.sc ol{list-style:none;padding:0;margin:0;display:grid;gap:14px}
+.sc ol li{display:grid;grid-template-columns:30px 1fr;gap:10px}
+.sc .n{font-family:"Bricolage Grotesque",system-ui,sans-serif;font-weight:700;font-size:21px;color:#2F6B4F;line-height:1.1}
+.sc h3{margin:0 0 2px;font-size:15px}
+.sc ol p{margin:0}
+.sc .foot{margin-top:28px;padding-top:10px;border-top:1px solid #DCE1D9;color:#5E6A63;font-size:12px;display:flex;justify-content:space-between}
+@media (max-width:700px){.sc{width:auto;padding:18px}.sc .top,.sc .cols{grid-template-columns:1fr}.sc .mt .g{grid-template-columns:repeat(2,1fr)}}`;
+function shareMarkup(r,img){
+  const c=CATMAP[r.categorie]||CATMAP.autres,m=r.meater;
+  const t=(lbl,v)=>`<div class="fact"><span class="lbl">${lbl}</span><b>${H(v)}</b></div>`;
+  return `<div class="sc">
+<div class="top"><img class="ph" src="${img}" alt=""><div>
+<span class="cat"><span class="dot" style="background:${c[2]}"></span>${H(c[1])}</span>
+<h1>${H(r.titre)}</h1><p class="res">${H(r.resume)}</p>
+<div class="facts">${t("Préparation",fmtMin(r.temps_preparation_min))}${t("Cuisson",fmtMin(r.temps_cuisson_min))}${t("Portions",r.portions||"—")}</div>
+<div class="tags">${(r.mots_cles||[]).map(k=>`<span class="tag">${H(k)}</span>`).join("")}</div></div></div>
+${m?`<div class="mt"><span class="lbl">Programme Meater · ${H([m.coupe,m.cuisson].filter(Boolean).join(" · "))}</span><div class="g">
+<div><span class="lbl">Cible interne</span><b>${m.temp_cible_interne_C} °C</b><small>${toF(m.temp_cible_interne_C)} °F</small></div>
+<div><span class="lbl">Retirer à</span><b>${m.temp_retrait_C} °C</b><small>${toF(m.temp_retrait_C)} °F</small></div>
+${m.temp_ambiante_C?`<div><span class="lbl">Four / BBQ</span><b>${m.temp_ambiante_C} °C</b><small>${toF(m.temp_ambiante_C)} °F</small></div>`:""}
+<div><span class="lbl">Repos</span><b>${m.repos_min||0} min</b><small>sous papier alu</small></div></div>${m.notes?`<p>${H(m.notes)}</p>`:""}</div>`:""}
+<div class="cols"><div><h2>Ingrédients</h2><ul>${(r.ingredients||[]).map(i=>`<li class="i"><span class="q">${H(qtyText(i))}</span><span>${H(i.nom)}${i.note?`<span class="note"> — ${H(i.note)}</span>`:""}</span></li>`).join("")}</ul></div>
+<div><h2>Description et étapes</h2><ol>${(r.etapes||[]).map((s,k)=>`<li><span class="n">${k+1}</span><div>${s.titre?`<h3>${H(s.titre)}</h3>`:""}<p>${H(spoonText(s.texte))}</p></div></li>`).join("")}</ol></div></div>
+<div class="foot"><span>Carnet de recettes</span><span>${H(new Date().toLocaleDateString("fr-CA",{year:"numeric",month:"long",day:"numeric"}))}</span></div>
+</div>`;
+}
+const slug=s=>String(s||"recette").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,60)||"recette";
+async function photoDataUrl(r){
+  try{const res=await fetch(imgSrc(r));const b=await res.blob();
+    if(/svg/.test(b.type)){ // SVG -> PNG pour que l'image fonctionne partout
+      const u=URL.createObjectURL(b);const im=new Image();im.src=u;await im.decode();
+      const cv=document.createElement("canvas");cv.width=1200;cv.height=900;cv.getContext("2d").drawImage(im,0,0,1200,900);URL.revokeObjectURL(u);return cv.toDataURL("image/jpeg",.9)}
+    return await new Promise((ok,ko)=>{const fr=new FileReader();fr.onload=()=>ok(fr.result);fr.onerror=ko;fr.readAsDataURL(b)})}
+  catch(e){return"data:image/svg+xml;charset=utf-8,"+encodeURIComponent(placeholderSvg(r))}
+}
+let h2cPromise=null;
+function loadH2C(){return h2cPromise||(h2cPromise=new Promise((ok,ko)=>{const s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";s.onload=()=>ok(window.html2canvas);s.onerror=()=>{h2cPromise=null;ko(new Error("html2canvas"))};document.head.append(s)}))}
+async function saveShare(filename,data,btn,label){
+  if(!downloads){toast("Le partage n'est pas disponible dans cette vue");return}
+  try{const res=await downloads.save({filename,data});toast(res?.status==="delivered"?"Fiche envoyée":"Fiche prête à partager")}
+  catch(e){if(e?.code!=="cancelled"&&e?.code!=="declined")toast("Partage annulé")}
+}
+async function shareImage(r,btn){
+  const old=btn.textContent;btn.disabled=true;btn.textContent="Préparation…";
+  const host=el("div",{style:"position:fixed;left:-10000px;top:0;z-index:-1","aria-hidden":"true"});
+  try{
+    const [h2c,img]=await Promise.all([loadH2C(),photoDataUrl(r)]);
+    const st=document.createElement("style");st.textContent=SHARE_CSS.replace(/@media[\s\S]*$/,"");host.append(st);
+    host.insertAdjacentHTML("beforeend",shareMarkup(r,img));document.body.append(host);
+    await Promise.all([...host.querySelectorAll("img")].map(i=>i.decode().catch(()=>{})));
+    try{await document.fonts.ready}catch(e){}
+    const canvas=await h2c(host.querySelector(".sc"),{scale:2,backgroundColor:"#F5F6F1",useCORS:true,logging:false});
+    const blob=await new Promise(ok=>canvas.toBlob(ok,"image/png"));
+    if(!blob)throw new Error("image");
+    await saveShare(slug(r.titre)+".png",blob,btn);
+  }catch(e){toast("L'image n'a pas pu être créée. Essaie « Partager en page ».")}
+  finally{host.remove();btn.disabled=false;btn.textContent=old}
+}
+async function sharePage(r,btn){
+  const old=btn.textContent;btn.disabled=true;btn.textContent="Préparation…";
+  try{
+    const img=await photoDataUrl(r);
+    const html=`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${H(r.titre)}</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@500&display=swap"><style>body{margin:0;background:#F5F6F1;display:flex;justify-content:center}${SHARE_CSS}@media print{.sc{width:auto}}</style></head><body>${shareMarkup(r,img)}</body></html>`;
+    await saveShare(slug(r.titre)+".html",new Blob([html],{type:"text/html"}),btn);
+  }catch(e){toast("La page n'a pas pu être créée.")}
+  finally{btn.disabled=false;btn.textContent=old}
 }
 
 /* ---------- Sauvegarde automatique Google Drive ---------- */
