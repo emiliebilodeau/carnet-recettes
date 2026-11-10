@@ -44,13 +44,15 @@ header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;backgroun
 .brand h1{font-size:26px}
 .brand span{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
 .search{flex:1 1 220px;max-width:360px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:8px 14px}
-.chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:12px;scrollbar-width:thin}
+.chips{display:flex;flex-wrap:wrap;gap:6px;padding-bottom:12px}
 .chip{flex:none;border:1px solid var(--line);background:transparent;border-radius:999px;padding:5px 12px;font-size:13px;display:inline-flex;gap:6px;align-items:center}
 .chip .dot{width:8px;height:8px;border-radius:50%}
 .drivestat{border:0;background:none;padding:0;font-family:var(--f-mono);font-size:12px;color:var(--muted)}
 .drivestat.ok{color:var(--accent)}
 .drivestat.err{color:var(--danger);text-decoration:underline}
 .drivelink{font-size:13px;color:var(--accent)}
+.aibox{display:grid;gap:8px;background:var(--accent-soft);border:1px solid var(--accent);border-radius:var(--r);padding:14px}
+.aibox textarea{background:var(--surface)}
 .chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .chip small{opacity:.7;font-variant-numeric:tabular-nums}
 
@@ -207,9 +209,9 @@ textarea{width:100%;border:1px solid var(--line);border-radius:8px;background:va
 <script>
 const CATS=[
  ["poulet","Poulet & volaille","#C9781E"],["boeuf","Bœuf","#9E2F2F"],["porc","Porc","#C76A7E"],
- ["agneau","Agneau & gibier","#7A4E3A"],["poisson","Poisson & fruits de mer","#2E7A9C"],["pates","Pâtes","#C9A227"],
+ ["agneau","Agneau & gibier","#7A4E3A"],["poisson","Poisson & fruits de mer","#2E7A9C"],["pates","Pâtes","#C9A227"],["pizza","Pizza","#D2553A"],
  ["vege","Végé","#3E8E4E"],["soupes","Soupes & mijotés","#8A6D3B"],["salades","Salades","#6AAA3A"],
- ["dejeuners","Déjeuners","#D99A3C"],["desserts","Desserts","#A35BA0"],["autres","Autres","#7B8580"]];
+ ["dejeuners","Déjeuners","#D99A3C"],["desserts","Desserts","#A35BA0"],["drinks","Drinks","#3F7FC4"],["autres","Autres","#7B8580"]];
 const CATMAP=Object.fromEntries(CATS.map(c=>[c[0],c]));
 const MEATS=["poulet","boeuf","porc","agneau","poisson"];
 const $=s=>document.querySelector(s);
@@ -425,8 +427,9 @@ Réponds UNIQUEMENT avec l'objet JSON "meater" : {"coupe","cuisson","temp_cible_
 }
 
 /* ---------- Édition ---------- */
-function renderEdit(r,bar,body){
-  const d=JSON.parse(JSON.stringify(r));
+function renderEdit(r,bar,body,draft,aiMsg){
+  const d=draft||JSON.parse(JSON.stringify(r));
+  d.ingredients=d.ingredients||[];d.etapes=d.etapes||[];
   const save=el("button",{class:"btn primary"},"Enregistrer");
   bar.append(el("button",{class:"btn",style:"margin-right:auto",onclick:()=>{editing=false;renderView()}},"Annuler"),save);
   const f=(label,input)=>el("label",{class:"field"},el("span",{class:"lbl",text:label}),input);
@@ -469,9 +472,45 @@ function renderEdit(r,bar,body){
   const delZone=el("div",{});
   const askDel=()=>{delZone.replaceChildren(el("div",{class:"confirm"},el("span",{text:"Supprimer « "+d.titre+" » pour de bon?"}),el("button",{class:"btn sm danger",onclick:async()=>{try{const oldDrive=r.driveId;await col.doc(r.id).delete();if(oldDrive&&mcp)mcp.callTool(DRIVE,"trash_file",{fileId:oldDrive}).catch(()=>{});recipes=recipes.filter(x=>x.id!==r.id);closeView();render();toast("Recette supprimée")}catch(e){toast("Suppression refusée")}}},"Supprimer"),el("button",{class:"btn sm",onclick:()=>delZone.replaceChildren(delBtn)},"Garder")))};
   const delBtn=el("button",{class:"btn sm danger",onclick:askDel},"Supprimer la recette");delZone.append(delBtn);
+  // Boîte Claude
+  const collect=()=>({...d,titre:iTitre.value.trim()||"Sans titre",categorie:iCat.value,portions:+iPor.value||0,temps_preparation_min:+iPrep.value||0,temps_cuisson_min:+iCuis.value||0,resume:iRes.value.trim(),
+    mots_cles:iTags.value.split(",").map(s=>s.trim().toLowerCase()).filter(Boolean),
+    ingredients:d.ingredients.filter(i=>i.nom.trim()),etapes:d.etapes.filter(s=>s.texte.trim()||s.titre.trim())});
+  const aiIn=el("textarea",{id:"e-ai",rows:"3",placeholder:"Ex. : double les portions · remplace la crème par du lait de coco · version à la mijoteuse · ajoute une étape pour la sauce · rends-la moins épicée"});
+  const aiStat=el("span",{class:"status","aria-live":"polite",text:aiMsg||""});
+  const aiBtn=el("button",{class:"btn primary sm"},"Appliquer avec Claude");
+  aiBtn.onclick=async()=>{
+    const instr=aiIn.value.trim();aiStat.classList.remove("err");
+    if(!instr){aiStat.textContent="Écris d'abord ce que tu veux changer.";return}
+    if(!sample){aiStat.classList.add("err");aiStat.textContent="Claude n'est pas disponible dans cette vue.";return}
+    const cur=collect();
+    const fiche={titre:cur.titre,categorie:cur.categorie,mots_cles:cur.mots_cles,portions:cur.portions,temps_preparation_min:cur.temps_preparation_min,temps_cuisson_min:cur.temps_cuisson_min,resume:cur.resume,ingredients:cur.ingredients,etapes:cur.etapes,meater:cur.meater||null};
+    aiBtn.disabled=true;aiStat.textContent="Claude modifie la fiche…";
+    try{
+      const res=await sample.json(`Tu es un chef québécois qui modifie une fiche recette existante. Applique la demande ci-dessous à la fiche et renvoie la fiche COMPLÈTE mise à jour. Garde tout ce que la demande ne touche pas. Si la demande change les quantités, les ingrédients ou la cuisson, mets à jour la liste d'ingrédients, CHAQUE étape concernée (les étapes reprennent les quantités), les temps, les portions, les mots clés et le programme Meater.
+Petites quantités (moins de 60 ml) en "c. à thé" ou "c. à table", jamais "c. à soupe".
+${MEATER_RULES}
+
+Demande : """${instr.slice(0,2000)}"""
+
+Fiche actuelle (JSON) :
+${JSON.stringify(fiche)}
+
+Réponds UNIQUEMENT avec l'objet JSON de la fiche, de cette forme (sans photo_dans_capture) :
+${SCHEMA}`,{modelTier:"default",cache:false});
+      if(!res||!res.titre||!Array.isArray(res.etapes))throw{code:"invalid_json"};
+      const n=normalize(res);
+      const next={...cur,...n,photoId:d.photoId||null,illustration:d.illustration||null};
+      bar.replaceChildren();body.replaceChildren();
+      renderEdit(r,bar,body,next,"Changements appliqués. Vérifie la fiche, puis touche « Enregistrer » (ou « Annuler » pour tout oublier).");
+      $("#viewSheet").scrollTop=0;
+    }catch(e){aiStat.classList.add("err");aiStat.textContent=errMsg(e);aiBtn.disabled=false}
+  };
+  const aiBox=el("div",{class:"aibox"},el("label",{class:"lbl",for:"e-ai",text:"Demander à Claude"}),aiIn,el("div",{style:"display:flex;gap:10px;align-items:center;flex-wrap:wrap"},aiBtn,aiStat));
 
   body.append(el("div",{class:"edit narrow",style:"margin:0 auto"},
     el("h2",{style:"font-size:26px",text:"Modifier la fiche"}),
+    aiBox,
     f("Titre",iTitre),
     el("div",{class:"row"},f("Catégorie",iCat),f("Portions",iPor),f("Préparation (min)",iPrep),f("Cuisson (min)",iCuis)),
     f("Résumé",iRes),f("Mots clés (séparés par des virgules)",iTags),
