@@ -43,6 +43,23 @@ header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;backgroun
 .brand{display:flex;align-items:baseline;gap:10px;margin-right:auto}
 .brand h1{font-size:26px}
 .brand span{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+.catsel{display:none;padding-bottom:10px}
+.catsel select{width:100%;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:8px 14px}
+@media (max-width:700px){
+  header.top{position:static}
+  header.top .chips{display:none}
+  header.top .catsel{display:block}
+  main .grid{grid-template-columns:1fr;gap:10px}
+  main .card{flex-direction:row}
+  main .card .thumb{width:104px;flex:none;aspect-ratio:auto;height:auto;min-height:104px}
+  main .card .body{padding:10px 12px;gap:4px}
+  main .card h3{font-size:16px}
+  main .card .tags{display:none}
+  .toprow{gap:8px;padding-block:10px}
+  .brand h1{font-size:22px}
+  .search{flex-basis:100%;max-width:none;order:5}
+  .toprow .btn{padding:6px 11px;font-size:13px}
+}
 .search{flex:1 1 220px;max-width:360px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:8px 14px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;padding-bottom:12px}
 .chip{flex:none;border:1px solid var(--line);background:transparent;border-radius:999px;padding:5px 12px;font-size:13px;display:inline-flex;gap:6px;align-items:center}
@@ -167,6 +184,7 @@ textarea{width:100%;border:1px solid var(--line);border-radius:8px;background:va
       <button class="btn primary" id="newBtn">+ Nouvelle recette</button>
     </div>
     <div class="chips" id="chips" role="toolbar" aria-label="Catégories"></div>
+    <div class="catsel"><select id="catSel" aria-label="Catégorie"></select></div>
   </div>
 </header>
 
@@ -251,6 +269,8 @@ function placeholderSvg(r){const c=(CATMAP[r.categorie]||CATMAP.autres)[2];retur
 /* ---------- Liste ---------- */
 function renderChips(){
   const n=k=>k==="all"?recipes.length:recipes.filter(r=>r.categorie===k).length;
+  const sel=$("#catSel");sel.replaceChildren(el("option",{value:"all",selected:filter==="all"},"Toutes les catégories ("+n("all")+")"),
+    ...CATS.filter(([k])=>n(k)||filter===k).map(([k,label])=>el("option",{value:k,selected:filter===k},label+" ("+n(k)+")")));
   const box=$("#chips");box.replaceChildren();
   box.append(el("button",{class:"chip","aria-pressed":String(filter==="all"),onclick:()=>{filter="all";render()}},"Toutes ",el("small",{text:n("all")})));
   for(const[k,label,color]of CATS){const c=n(k);if(!c&&filter!==k)continue;
@@ -790,6 +810,7 @@ $("#importFile").onchange=async e=>{
   catch(err){toast("Fichier illisible : choisis un export du carnet")}
 };
 
+$("#catSel").addEventListener("change",e=>{filter=e.target.value;render()});
 $("#q").addEventListener("input",e=>{query=e.target.value.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"");render()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("#addSheet").hidden)$("#addSheet").hidden=true;else if(current&&!editing)closeView()}});
 
