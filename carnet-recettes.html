@@ -53,6 +53,17 @@ header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;backgroun
 .drivelink{font-size:13px;color:var(--accent)}
 .aibox{display:grid;gap:8px;background:var(--accent-soft);border:1px solid var(--accent);border-radius:var(--r);padding:14px}
 .aibox textarea{background:var(--surface)}
+.sharepanel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-top:16px;display:grid;gap:10px}
+.sharepanel .lbl{margin:0}
+.shareopts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px}
+.shareopt{display:grid;gap:2px;text-align:left;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:10px 12px}
+.shareopt:hover{border-color:var(--accent)}
+.shareopt b{font-weight:600}
+.shareopt span{color:var(--muted);font-size:13px}
+.shareopt[disabled]{opacity:.6}
+.aishots{display:flex;flex-wrap:wrap;gap:12px}
+.aishot{display:grid;gap:6px;justify-items:start}
+.ephoto{width:200px;max-width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:8px;background:var(--accent-soft);border:1px solid var(--line)}
 .chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .chip small{opacity:.7;font-variant-numeric:tabular-nums}
 
@@ -287,7 +298,8 @@ $("#shotFile").onchange=e=>{addShots(e.target.files);e.target.value=""};
 $("#shotCam").onchange=e=>{addShots(e.target.files);e.target.value=""};
 $("#photoFile").onchange=e=>{setDishPhoto(e.target.files[0]);e.target.value=""};
 $("#photoCam").onchange=e=>{setDishPhoto(e.target.files[0]);e.target.value=""};
-$("#rawText").addEventListener("paste",e=>{const fs=[...(e.clipboardData?.files||[])].filter(f=>/^image\//.test(f.type));if(fs.length){e.preventDefault();addShots(fs);toast("Capture ajoutée")}});
+function clipImages(e){const cd=e.clipboardData;let out=[...(cd?.files||[])];if(!out.length)for(const it of [...(cd?.items||[])])if(it.kind==="file"){const f=it.getAsFile();if(f)out.push(f)}return out.filter(f=>/^image\//.test(f.type)||/\.(heic|heif)$/i.test(f.name||""))}
+$("#rawText").addEventListener("paste",e=>{const fs=clipImages(e);if(fs.length){e.preventDefault();addShots(fs);toast("Capture ajoutée")}});
 const drop=$("#drop");
 drop.addEventListener("dragover",e=>{e.preventDefault();drop.classList.add("over")});
 drop.addEventListener("dragleave",()=>drop.classList.remove("over"));
@@ -384,7 +396,8 @@ function renderView(){
   const r=recipes.find(x=>x.id===current);if(!r){closeView();return}
   const bar=$("#viewBar"),body=$("#viewBody");bar.replaceChildren();body.replaceChildren();
   if(editing){renderEdit(r,bar,body);return}
-  bar.append(el("button",{class:"btn grow",style:"margin-right:auto",onclick:closeView},"← Toutes les recettes"),el("button",{class:"btn",onclick:e=>shareImage(r,e.currentTarget)},"Partager en image"),el("button",{class:"btn",onclick:e=>sharePage(r,e.currentTarget)},"Partager en page"),el("button",{class:"btn",onclick:()=>{editing=true;renderView()}},"Modifier"));
+  bar.append(el("button",{class:"btn grow",style:"margin-right:auto",onclick:closeView},"← Toutes les recettes"),el("button",{class:"btn","aria-expanded":"false",onclick:e=>{const p=$("#sharePanel");p.hidden=!p.hidden;e.currentTarget.setAttribute("aria-expanded",String(!p.hidden))}},"Partager"),el("button",{class:"btn",onclick:()=>{editing=true;renderView()}},"Modifier"));
+  body.append(sharePanel(r));
   const c=CATMAP[r.categorie]||CATMAP.autres;
   body.append(el("div",{class:"hero"},
     el("img",{src:imgSrc(r),alt:r.titre}),
@@ -464,10 +477,20 @@ function renderEdit(r,bar,body,draft,aiMsg){
   // Photo
   const photoIn=el("input",{type:"file",id:"e-photo",accept:"image/*",hidden:true});
   const camIn=el("input",{type:"file",id:"e-cam",accept:"image/*",capture:"environment",hidden:true});
-  const pStat=el("span",{class:"status"});
-  const onPhoto=async e=>{const raw=e.target.files[0];e.target.value="";if(!raw||!assets)return;pStat.classList.remove("err");pStat.textContent="Envoi…";try{const file=await prepImage(raw);if(!file)throw{message:"format illisible"};const up=await assets.upload(file);d.photoId=up.id;pStat.textContent="Nouvelle photo prête (enregistre pour garder)"}catch(err){pStat.classList.add("err");pStat.textContent="Photo refusée : "+(err.message||err.code)}};
+  const pStat=el("span",{class:"status","aria-live":"polite"});
+  const pPrev=el("img",{class:"ephoto",src:imgSrc(d),alt:"Photo de la fiche"});
+  const showPhoto=()=>{pPrev.src=imgSrc(d)};
+  // Remplace la photo de la fiche (renvoie true si c'est réussi)
+  const setPhoto=async raw=>{
+    pStat.classList.remove("err");
+    if(!assets){pStat.classList.add("err");pStat.textContent="Les photos ne peuvent pas être enregistrées dans cette vue. Ouvre le carnet dans claude.ai.";return false}
+    pStat.textContent="Envoi de la photo…";
+    try{const file=await prepImage(raw);if(!file)throw{message:"format illisible"};const up=await assets.upload(file);d.photoId=up.id;showPhoto();pStat.textContent="Nouvelle photo — touche « Enregistrer » pour la garder";return true}
+    catch(err){pStat.classList.add("err");pStat.textContent="Photo refusée : "+(err.message||err.code||"erreur");return false}
+  };
+  const onPhoto=async e=>{const raw=e.target.files[0];e.target.value="";if(raw)await setPhoto(raw)};
   photoIn.onchange=onPhoto;camIn.onchange=onPhoto;
-  const regen=el("button",{class:"btn sm",onclick:async e=>{const b=e.target;b.disabled=true;pStat.textContent="Illustration…";try{const svg=await makeIllustration({titre:iTitre.value,resume:iRes.value});if(svg){d.illustration=svg;d.photoId=null;pStat.textContent="Nouvelle illustration prête (enregistre pour garder)"}}catch(err){pStat.textContent=errMsg(err)}b.disabled=false}},"Redessiner l'illustration");
+  const regen=el("button",{class:"btn sm",onclick:async e=>{const b=e.target;b.disabled=true;pStat.textContent="Illustration…";try{const svg=await makeIllustration({titre:iTitre.value,resume:iRes.value});if(svg){d.illustration=svg;d.photoId=null;showPhoto();pStat.textContent="Nouvelle illustration — touche « Enregistrer » pour la garder"}}catch(err){pStat.textContent=errMsg(err)}b.disabled=false}},"Redessiner l'illustration");
   // Supprimer
   const delZone=el("div",{});
   const askDel=()=>{delZone.replaceChildren(el("div",{class:"confirm"},el("span",{text:"Supprimer « "+d.titre+" » pour de bon?"}),el("button",{class:"btn sm danger",onclick:async()=>{try{const oldDrive=r.driveId;await col.doc(r.id).delete();if(oldDrive&&mcp)mcp.callTool(DRIVE,"trash_file",{fileId:oldDrive}).catch(()=>{});recipes=recipes.filter(x=>x.id!==r.id);closeView();render();toast("Recette supprimée")}catch(e){toast("Suppression refusée")}}},"Supprimer"),el("button",{class:"btn sm",onclick:()=>delZone.replaceChildren(delBtn)},"Garder")))};
@@ -477,10 +500,20 @@ function renderEdit(r,bar,body,draft,aiMsg){
     mots_cles:iTags.value.split(",").map(s=>s.trim().toLowerCase()).filter(Boolean),
     ingredients:d.ingredients.filter(i=>i.nom.trim()),etapes:d.etapes.filter(s=>s.texte.trim()||s.titre.trim())});
   const aiIn=el("textarea",{id:"e-ai",rows:"3",placeholder:"Ex. : double les portions · remplace la crème par du lait de coco · version à la mijoteuse · ou colle ici du texte ou une capture pour compléter la fiche"});
-  const aiShots=[];const aiThumbs=el("div",{class:"shots"});
-  const drawAiShots=()=>{aiThumbs.replaceChildren(...aiShots.map((f,i)=>el("div",{class:"shot"},el("img",{src:URL.createObjectURL(f),alt:"Image "+(i+1)}),el("button",{"aria-label":"Retirer",onclick:()=>{aiShots.splice(i,1);drawAiShots()}},"×"))))};
-  const addAiShots=async files=>{for(const f of [...files]){if(!/^image\//.test(f.type)&&!/\.(heic|heif)$/i.test(f.name||""))continue;const p=await prepImage(f);if(p&&aiShots.length<5)aiShots.push(p)}drawAiShots()};
-  aiIn.addEventListener("paste",e=>{const fs=[...(e.clipboardData?.files||[])].filter(f=>/^image\//.test(f.type));if(fs.length){e.preventDefault();addAiShots(fs);toast("Image ajoutée")}});
+  // Images de la boîte Claude : la première ajoutée remplace la photo de la fiche (annulable)
+  const aiShots=[];const aiThumbs=el("div",{class:"aishots"});
+  const drawAiShots=()=>{aiThumbs.replaceChildren(...aiShots.map((s,i)=>el("div",{class:"aishot"},
+    el("div",{class:"shot"},el("img",{src:s.url,alt:"Image "+(i+1)}),el("button",{"aria-label":"Retirer",onclick:()=>{if(s.photo){d.photoId=s.prevPhoto;showPhoto();pStat.textContent=""}aiShots.splice(i,1);drawAiShots()}},"×")),
+    s.photo?el("button",{class:"btn sm",onclick:()=>{d.photoId=s.prevPhoto;showPhoto();s.photo=false;pStat.textContent="Photo d'origine remise";drawAiShots()}},"Garder l'ancienne photo")
+      :el("button",{class:"btn sm",onclick:async()=>{const prev=d.photoId||null;if(await setPhoto(s.file)){aiShots.forEach(x=>x.photo=false);s.photo=true;s.prevPhoto=prev;drawAiShots()}}},"Utiliser comme photo"),
+    s.photo?el("span",{class:"lbl",text:"Photo de la fiche"}):null)))};
+  const addAiShots=async files=>{
+    let first=!aiShots.some(s=>s.photo);
+    for(const f of [...files]){if(!/^image\//.test(f.type)&&!/\.(heic|heif)$/i.test(f.name||""))continue;if(aiShots.length>=5)break;
+      const p=await prepImage(f);if(!p)continue;const s={file:p,url:URL.createObjectURL(p),photo:false};aiShots.push(s);
+      if(first){const prev=d.photoId||null;if(await setPhoto(p)){s.photo=true;s.prevPhoto=prev;toast("Photo de la fiche remplacée")}else toast(pStat.textContent);first=false}}
+    drawAiShots()};
+  aiIn.addEventListener("paste",e=>{const fs=clipImages(e);if(fs.length){e.preventDefault();addAiShots(fs);toast("Image ajoutée")}});
   aiIn.addEventListener("dragover",e=>e.preventDefault());
   aiIn.addEventListener("drop",e=>{if(e.dataTransfer?.files?.length){e.preventDefault();addAiShots(e.dataTransfer.files)}});
   const aiFile=el("input",{type:"file",id:"e-ai-file",accept:"image/*",multiple:true,hidden:true,onchange:e=>{addAiShots(e.target.files);e.target.value=""}});
@@ -507,7 +540,7 @@ Fiche actuelle (JSON) :
 ${JSON.stringify(fiche)}
 
 Réponds UNIQUEMENT avec l'objet JSON de la fiche, de cette forme (sans photo_dans_capture) :
-${SCHEMA}`,{modelTier:"default",cache:false,images:aiShots.length?aiShots.slice(0,5):undefined});
+${SCHEMA}`,{modelTier:"default",cache:false,images:aiShots.length?aiShots.slice(0,5).map(s=>s.file):undefined});
       if(!res||!res.titre||!Array.isArray(res.etapes))throw{code:"invalid_json"};
       const n=normalize(res);
       const next={...cur,...n,photoId:d.photoId||null,illustration:d.illustration||null};
@@ -526,7 +559,7 @@ ${SCHEMA}`,{modelTier:"default",cache:false,images:aiShots.length?aiShots.slice(
     f("Titre",iTitre),
     el("div",{class:"row"},f("Catégorie",iCat),f("Portions",iPor),f("Préparation (min)",iPrep),f("Cuisson (min)",iCuis)),
     f("Résumé",iRes),f("Mots clés (séparés par des virgules)",iTags),
-    el("div",{class:"field"},el("span",{class:"lbl",text:"Photo"}),el("div",{style:"display:flex;gap:8px;flex-wrap:wrap;align-items:center"},el("label",{class:"btn sm",for:"e-cam"},"Prendre une photo"),camIn,el("label",{class:"btn sm",for:"e-photo"},"Choisir dans la galerie"),photoIn,regen,pStat)),
+    el("div",{class:"field"},el("span",{class:"lbl",text:"Photo"}),pPrev,el("div",{style:"display:flex;gap:8px;flex-wrap:wrap;align-items:center"},el("label",{class:"btn sm",for:"e-cam"},"Prendre une photo"),camIn,el("label",{class:"btn sm",for:"e-photo"},"Choisir dans la galerie"),photoIn,regen,pStat)),
     el("div",{class:"field"},el("span",{class:"lbl",text:"Ingrédients"}),ingBox),
     el("div",{class:"field"},el("span",{class:"lbl",text:"Étapes"}),stepBox),
     el("div",{class:"field"},el("span",{class:"lbl",text:"Programme Meater"}),mBox),
@@ -612,8 +645,7 @@ async function saveShare(filename,data,btn,label){
   try{const res=await downloads.save({filename,data});toast(res?.status==="delivered"?"Fiche envoyée":"Fiche prête à partager")}
   catch(e){if(e?.code!=="cancelled"&&e?.code!=="declined")toast("Partage annulé")}
 }
-async function shareImage(r,btn){
-  const old=btn.textContent;btn.disabled=true;btn.textContent="Préparation…";
+async function makeImageBlob(r){
   const host=el("div",{style:"position:fixed;left:-10000px;top:0;z-index:-1","aria-hidden":"true"});
   try{
     const [h2c,img]=await Promise.all([loadH2C(),photoDataUrl(r)]);
@@ -624,9 +656,60 @@ async function shareImage(r,btn){
     const canvas=await h2c(host.querySelector(".sc"),{scale:2,backgroundColor:"#F5F6F1",useCORS:true,logging:false});
     const blob=await new Promise(ok=>canvas.toBlob(ok,"image/png"));
     if(!blob)throw new Error("image");
-    await saveShare(slug(r.titre)+".png",blob,btn);
-  }catch(e){toast("L'image n'a pas pu être créée. Essaie « Partager en page ».")}
-  finally{host.remove();btn.disabled=false;btn.textContent=old}
+    return blob;
+  }finally{host.remove()}
+}
+const imgCache=new Map();
+function imageBlobFor(r){const k=r.id+":"+(r.modifie||0);if(!imgCache.has(k)){const p=makeImageBlob(r);p.catch(()=>imgCache.delete(k));imgCache.set(k,p)}return imgCache.get(k)}
+async function shareImage(r,btn){
+  const old=btn.textContent;btn.disabled=true;btn.textContent="Préparation…";
+  try{await saveShare(slug(r.titre)+".png",await imageBlobFor(r),btn)}
+  catch(e){toast("L'image n'a pas pu être créée. Essaie « Enregistrer la page ».")}
+  finally{btn.disabled=false;btn.textContent=old}
+}
+function copyImage(r,btn){
+  const old=btn.textContent;btn.disabled=true;btn.textContent="Préparation…";
+  let p;
+  try{
+    if(!navigator.clipboard?.write||typeof ClipboardItem==="undefined")throw new Error("no");
+    // L'écriture doit partir pendant le clic : on lui donne la promesse de l'image
+    p=navigator.clipboard.write([new ClipboardItem({"image/png":imageBlobFor(r)})]);
+  }catch(e){p=Promise.reject(e)}
+  p.then(()=>toast("Image copiée — colle-la dans ton courriel, Messenger ou Teams"))
+   .catch(()=>toast("Ce navigateur ne permet pas de copier l'image. Utilise « Enregistrer l'image »."))
+   .finally(()=>{btn.disabled=false;btn.textContent=old});
+}
+function recipeText(r){
+  const c=(CATMAP[r.categorie]||CATMAP.autres)[1],m=r.meater,L=[];
+  L.push(r.titre.toUpperCase());
+  L.push([c,"Prép. "+fmtMin(r.temps_preparation_min),"Cuisson "+fmtMin(r.temps_cuisson_min),r.portions?r.portions+" portions":""].filter(Boolean).join(" · "));
+  if(r.resume)L.push("",r.resume);
+  L.push("","INGRÉDIENTS");
+  for(const i of r.ingredients||[])L.push("• "+[qtyText(i),i.nom].filter(Boolean).join(" ")+(i.note?" ("+i.note+")":""));
+  L.push("","ÉTAPES");
+  (r.etapes||[]).forEach((s,k)=>L.push((k+1)+". "+(s.titre?s.titre+" — ":"")+spoonText(s.texte)));
+  if(m){L.push("","PROGRAMME MEATER"+(m.coupe||m.cuisson?" ("+[m.coupe,m.cuisson].filter(Boolean).join(", ")+")":""));
+    L.push("Cible interne : "+m.temp_cible_interne_C+" °C ("+toF(m.temp_cible_interne_C)+" °F) · Retirer à "+m.temp_retrait_C+" °C ("+toF(m.temp_retrait_C)+" °F)"+(m.temp_ambiante_C?" · Four/BBQ "+m.temp_ambiante_C+" °C ("+toF(m.temp_ambiante_C)+" °F)":"")+" · Repos "+(m.repos_min||0)+" min");
+    if(m.notes)L.push(m.notes)}
+  if(r.mots_cles?.length)L.push("","#"+r.mots_cles.map(k=>k.replace(/\s+/g,"")).join(" #"));
+  return L.join("\n");
+}
+function copyText(r,box){
+  const txt=recipeText(r);
+  const fallback=()=>{box.replaceChildren(el("p",{class:"hint",text:"Copie ce texte (sélectionne-le puis Copier) :"}),(()=>{const t=el("textarea",{rows:"8",readonly:true,"aria-label":"Texte de la recette"});t.value=txt;setTimeout(()=>{t.focus();t.select()},0);return t})());box.hidden=false};
+  try{navigator.clipboard.writeText(txt).then(()=>toast("Texte copié — colle-le dans ton courriel, Messenger ou Teams"),fallback)}catch(e){fallback()}
+}
+function sharePanel(r){
+  const fb=el("div",{hidden:true});
+  const b=(label,desc,fn)=>el("button",{class:"shareopt",onclick:e=>fn(e.currentTarget)},el("b",{text:label}),el("span",{text:desc}));
+  return el("div",{id:"sharePanel",class:"sharepanel",hidden:true},
+    el("p",{class:"lbl",text:"Partager par courriel, Messenger ou Teams"}),
+    el("div",{class:"shareopts"},
+      b("Copier l'image","La fiche avec sa mise en page, à coller directement dans le message",btn=>copyImage(r,btn.querySelector("b"))),
+      b("Copier le texte","La recette en texte, à coller dans n'importe quelle app",()=>copyText(r,fb)),
+      b("Enregistrer l'image","Un fichier .png à joindre; sur cellulaire, peut ouvrir le menu de partage",btn=>shareImage(r,btn.querySelector("b"))),
+      b("Enregistrer la page","Un fichier .html qui s'ouvre dans n'importe quel navigateur",btn=>sharePage(r,btn.querySelector("b")))),
+    fb);
 }
 async function sharePage(r,btn){
   const old=btn.textContent;btn.disabled=true;btn.textContent="Préparation…";
